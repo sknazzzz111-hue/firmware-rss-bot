@@ -11,6 +11,7 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID")
 RSS_URL = os.environ.get("RSS_URL")
 
 POSTED_FILE = "posted_urls.txt"
+MAX_POSTED_URLS = 3000  # ফাইল সাইজ ও মেমোরি ঠিক রাখতে সর্বোচ্চ লিংকের লিমিট
 
 # ব্র্যান্ড চিহ্নিত করার তালিকা
 BRANDS = [
@@ -21,16 +22,23 @@ BRANDS = [
 def get_posted_urls():
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
+            lines = [line.strip() for line in f if line.strip()]
+            return set(lines), lines
+    return set(), []
 
-def save_posted_urls(urls):
-    with open(POSTED_FILE, "a") as f:
-        for url in urls:
+def save_posted_urls(new_urls, all_lines_list):
+    # নতুন লিংকগুলো লিস্টে যোগ করা
+    all_lines_list.extend(new_urls)
+    
+    # অটো-ক্লিনআপ: যদি ৩০০০ এর বেশি হয়ে যায়, তবে পুরোনো লিংক মুছে ফেলা
+    if len(all_lines_list) > MAX_POSTED_URLS:
+        all_lines_list = all_lines_list[-MAX_POSTED_URLS:]
+        
+    with open(POSTED_FILE, "w") as f:
+        for url in all_lines_list:
             f.write(url + "\n")
 
 def clean_url(url):
-    # Google Search Prefix মুছে ফেলা
     prefix = "https://www.google.com/search?q="
     if url.startswith(prefix):
         url = url[len(prefix):]
@@ -59,14 +67,14 @@ def send_telegram_message(html_text):
         return False
 
 def check_rss():
-    posted = get_posted_urls()
+    posted_set, posted_list = get_posted_urls()
     feed = feedparser.parse(RSS_URL)
     
     new_entries = []
     for entry in feed.entries:
         raw_link = entry.get("link", "")
         link = clean_url(raw_link)
-        if link and link not in posted:
+        if link and link not in posted_set:
             new_entries.append((entry.get("title", "").strip(), link))
             
     if not new_entries:
@@ -90,7 +98,7 @@ def check_rss():
     time_str = now.strftime("%I:%M %p")
 
     # টেলিগ্রাম Quote ফরম্যাটের জন্য blockquote ব্যবহার
-    message_lines = ["<blockquote>"] # Quote ব্লক শুরু
+    message_lines = ["<blockquote>"]
     message_lines.append(f"📅 Today's Update: {date_str} | ⏰ {time_str}")
     message_lines.append("🌐 Official Website: https://firmwareworld.com/\n")
 
@@ -101,13 +109,13 @@ def check_rss():
             message_lines.append(f"{title}")
             message_lines.append(f"🔗 File Link: {link}\n")
 
-    message_lines.append("</blockquote>") # Quote ব্লক শেষ
+    message_lines.append("</blockquote>")
 
     full_message = "\n".join(message_lines)
 
     if send_telegram_message(full_message):
         print("Successfully posted update using Quote format.")
-        save_posted_urls(new_posted_urls)
+        save_posted_urls(new_posted_urls, posted_list)
 
 if __name__ == "__main__":
     print("RSS Auto-Poster Bot Started...")
