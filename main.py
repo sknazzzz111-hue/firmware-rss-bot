@@ -1,20 +1,33 @@
 import os
 import time
 import re
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 import pytz
 import feedparser
 import requests
+
+# Render-এর পোর্ট চেক পাস করার জন্য ফেক HTTP সার্ভার
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running successfully!")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID")
 RSS_URL = os.environ.get("RSS_URL")
 
 POSTED_FILE = "posted_urls.txt"
-MAX_POSTED_URLS = 3000  # ফাইল সাইজ ও মেমোরি ঠিক রাখতে সর্বোচ্চ লিংকের লিমিট
-FILES_PER_MESSAGE = 20  # প্রতি মেসেজে সর্বোচ্চ ২০টি করে ফাইল পাঠাবে
+MAX_POSTED_URLS = 3000
+FILES_PER_MESSAGE = 20
 
-# ব্র্যান্ড চিহ্নিত করার তালিকা
 BRANDS = [
     "VIVO", "OPPO", "REALME", "XIAOMI", "REDMI", "POCO", 
     "SAMSUNG", "ONEPLUS", "TECNO", "INFINIX", "ITEL", "MOTOROLA", "NOKIA"
@@ -29,10 +42,8 @@ def get_posted_urls():
 
 def save_posted_urls(new_urls, all_lines_list):
     all_lines_list.extend(new_urls)
-    
     if len(all_lines_list) > MAX_POSTED_URLS:
         all_lines_list = all_lines_list[-MAX_POSTED_URLS:]
-        
     with open(POSTED_FILE, "w") as f:
         for url in all_lines_list:
             f.write(url + "\n")
@@ -107,7 +118,6 @@ def check_rss():
     if not new_entries:
         return
 
-    # পুরোনো থেকে নতুন হিসেবে সাজানো
     new_entries = list(reversed(new_entries))
 
     bd_tz = pytz.timezone("Asia/Dhaka")
@@ -115,7 +125,6 @@ def check_rss():
     date_str = now.strftime("%d %B %Y")
     time_str = now.strftime("%I:%M %p")
 
-    # ফাইলগুলোকে ২০টি করে ভাগে ভাগ করা (Chunking)
     for i in range(0, len(new_entries), FILES_PER_MESSAGE):
         chunk = new_entries[i:i + FILES_PER_MESSAGE]
         success, sent_urls = build_and_send_chunk(chunk, date_str, time_str)
@@ -125,15 +134,16 @@ def check_rss():
         else:
             print("Failed to post batch. Stopping further posts for this cycle.")
             break
-        
-        # টেলিগ্রাম এপিআই রেট লিমিট এড়াতে ৩ সেকেন্ড বিরতি
         time.sleep(3)
 
 if __name__ == "__main__":
+    # ব্যাকগ্রাউন্ডে পোর্টের জন্য থ্রেড চালু
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
     print("RSS Auto-Poster Bot Started...")
     while True:
         try:
             check_rss()
         except Exception as e:
             print(f"Error in loop: {e}")
-        time.sleep(300) # প্রতি ৫ মিনিট পর পর RSS চেক করবে
+        time.sleep(300)
