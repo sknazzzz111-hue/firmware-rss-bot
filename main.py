@@ -12,6 +12,7 @@ RSS_URL = os.environ.get("RSS_URL")
 
 POSTED_FILE = "posted_urls.txt"
 MAX_POSTED_URLS = 3000  # ফাইল সাইজ ও মেমোরি ঠিক রাখতে সর্বোচ্চ লিংকের লিমিট
+FILES_PER_MESSAGE = 20  # প্রতি মেসেজে সর্বোচ্চ ২০টি করে ফাইল পাঠাবে
 
 # ব্র্যান্ড চিহ্নিত করার তালিকা
 BRANDS = [
@@ -27,10 +28,8 @@ def get_posted_urls():
     return set(), []
 
 def save_posted_urls(new_urls, all_lines_list):
-    # নতুন লিংকগুলো লিস্টে যোগ করা
     all_lines_list.extend(new_urls)
     
-    # অটো-ক্লিনআপ: যদি ৩০০০ এর বেশি হয়ে যায়, তবে পুরোনো লিংক মুছে ফেলা
     if len(all_lines_list) > MAX_POSTED_URLS:
         all_lines_list = all_lines_list[-MAX_POSTED_URLS:]
         
@@ -66,38 +65,17 @@ def send_telegram_message(html_text):
         print(f"Error sending message: {e}")
         return False
 
-def check_rss():
-    posted_set, posted_list = get_posted_urls()
-    feed = feedparser.parse(RSS_URL)
-    
-    new_entries = []
-    for entry in feed.entries:
-        raw_link = entry.get("link", "")
-        link = clean_url(raw_link)
-        if link and link not in posted_set:
-            new_entries.append((entry.get("title", "").strip(), link))
-            
-    if not new_entries:
-        return
-
-    # ব্র্যান্ড অনুযায়ী ফাইল আলাদা করা
+def build_and_send_chunk(entries_chunk, date_str, time_str):
     grouped_files = {}
-    new_posted_urls = []
+    chunk_posted_urls = []
 
-    for title, link in reversed(new_entries):
+    for title, link in entries_chunk:
         brand = detect_brand(title)
         if brand not in grouped_files:
             grouped_files[brand] = []
         grouped_files[brand].append((title, link))
-        new_posted_urls.append(link)
+        chunk_posted_urls.append(link)
 
-    # বর্তমান তারিখ ও সময় (Asia/Dhaka)
-    bd_tz = pytz.timezone("Asia/Dhaka")
-    now = datetime.now(bd_tz)
-    date_str = now.strftime("%d %B %Y")
-    time_str = now.strftime("%I:%M %p")
-
-    # টেলিগ্রাম Quote ফরম্যাটের জন্য blockquote ব্যবহার
     message_lines = ["<blockquote>"]
     message_lines.append(f"📅 Today's Update: {date_str} | ⏰ {time_str}")
     message_lines.append("🌐 Official Website: https://firmwareworld.com/\n")
@@ -112,10 +90,44 @@ def check_rss():
     message_lines.append("</blockquote>")
 
     full_message = "\n".join(message_lines)
+    success = send_telegram_message(full_message)
+    return success, chunk_posted_urls
 
-    if send_telegram_message(full_message):
-        print("Successfully posted update using Quote format.")
-        save_posted_urls(new_posted_urls, posted_list)
+def check_rss():
+    posted_set, posted_list = get_posted_urls()
+    feed = feedparser.parse(RSS_URL)
+    
+    new_entries = []
+    for entry in feed.entries:
+        raw_link = entry.get("link", "")
+        link = clean_url(raw_link)
+        if link and link not in posted_set:
+            new_entries.append((entry.get("title", "").strip(), link))
+            
+    if not new_entries:
+        return
+
+    # পুরোনো থেকে নতুন হিসেবে সাজানো
+    new_entries = list(reversed(new_entries))
+
+    bd_tz = pytz.timezone("Asia/Dhaka")
+    now = datetime.now(bd_tz)
+    date_str = now.strftime("%d %B %Y")
+    time_str = now.strftime("%I:%M %p")
+
+    # ফাইলগুলোকে ২০টি করে ভাগে ভাগ করা (Chunking)
+    for i in range(0, len(new_entries), FILES_PER_MESSAGE):
+        chunk = new_entries[i:i + FILES_PER_MESSAGE]
+        success, sent_urls = build_and_send_chunk(chunk, date_str, time_str)
+        if success:
+            save_posted_urls(sent_urls, posted_list)
+            print(f"Successfully posted a batch of {len(chunk)} files.")
+        else:
+            print("Failed to post batch. Stopping further posts for this cycle.")
+            break
+        
+        # টেলিগ্রাম এপিআই রেট লিমিট এড়াতে ৩ সেকেন্ড বিরতি
+        time.sleep(3)
 
 if __name__ == "__main__":
     print("RSS Auto-Poster Bot Started...")
