@@ -1,5 +1,4 @@
 feedparser
 requests
-python-telegram-bot
 pytz
 flask
